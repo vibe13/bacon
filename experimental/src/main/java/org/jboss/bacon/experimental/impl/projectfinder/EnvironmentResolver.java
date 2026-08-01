@@ -7,6 +7,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import org.apache.maven.artifact.versioning.ComparableVersion;
+import org.apache.maven.artifact.versioning.DefaultArtifactVersion;
+import org.apache.maven.artifact.versioning.InvalidVersionSpecificationException;
+import org.apache.maven.artifact.versioning.VersionRange;
 import org.jboss.bacon.experimental.impl.config.BuildConfigGeneratorConfig;
 import org.jboss.pnc.api.enums.BuildType;
 import org.jboss.pnc.bacon.common.exception.FatalException;
@@ -20,6 +24,8 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 public class EnvironmentResolver {
+
+    private static final int DEFAULT_MAVEN_MAJOR = 3;
 
     private final Map<String, Environment> environments = new HashMap<>();
     private final BuildConfigGeneratorConfig config;
@@ -109,15 +115,136 @@ public class EnvironmentResolver {
             return findByName(config.getDefaultValues().getEnvironmentName());
         }
 
-        candidates.sort(environmentComparator(buildInfo));
-
-        Environment selected = candidates.get(0);
+        Environment selected = selectBestEnvironment(candidates, buildInfo);
         log.info(
-                "Selected environment '{}' for build info (JDK={}, type={})",
+                "Selected environment '{}' for build info (JDK={}, type={}, toolVersion={}, constraint={})",
                 selected.getName(),
                 buildInfo.getJdkVersion(),
-                buildInfo.getBuildType());
+                buildInfo.getBuildType(),
+                buildInfo.getBuildToolVersion(),
+                buildInfo.getBuildToolVersionConstraint());
         return selected;
+    }
+
+    private Environment selectBestEnvironment(List<Environment> candidates, ProjectBuildInfo buildInfo) {
+        String attrKey = buildInfo.getBuildType() == BuildType.GRADLE ? "GRADLE" : "MAVEN";
+        String requestedVersion = buildInfo.getBuildToolVersion();
+        BuildToolVersionConstraint constraint = buildInfo.getBuildToolVersionConstraint();
+
+        if (constraint == BuildToolVersionConstraint.REQUIRED_RANGE && requestedVersion != null) {
+            return selectHighestSatisfyingRange(candidates, attrKey, requestedVersion);
+        }
+        if (requestedVersion != null) {
+            return selectPreferredVersion(candidates, attrKey, requestedVersion);
+        }
+        if (buildInfo.getBuildType() == BuildType.MVN) {
+            return selectHighestMavenVersion(candidates);
+        }
+        return candidates.stream().min(simpleEnvironmentComparator()).orElseThrow();
+    }
+
+    private Environment selectHighestSatisfyingRange(
+            List<Environment> candidates,
+            String attrKey,
+            String requestedRange) {
+        String normalizedRange = normalizeRequiredRange(requestedRange);
+        try {
+            VersionRange range = VersionRange.createFromVersionSpec(normalizedRange);
+            List<Environment> satisfying = candidates.stream()
+                    .filter(env -> range.containsVersion(new DefaultArtifactVersion(toolVersion(env, attrKey))))
+                    .collect(Collectors.toList());
+            if (!satisfying.isEmpty()) {
+                List<Environment> compatible = "MAVEN".equals(attrKey)
+                        ? preferDefaultMavenMajor(satisfying)
+                        : satisfying;
+                return selectHighestVersion(compatible, attrKey);
+            }
+            log.warn(
+                    "No environment satisfies required {} version range {}. Selecting the highest available compatible environment.",
+                    attrKey,
+                    normalizedRange);
+        } catch (InvalidVersionSpecificationException e) {
+            log.warn(
+                    "Could not parse required {} version range '{}'. Selecting the highest available compatible environment.",
+                    attrKey,
+                    requestedRange);
+        }
+        return "MAVEN".equals(attrKey)
+                ? selectHighestMavenVersion(candidates)
+                : selectHighestVersion(candidates, attrKey);
+    }
+
+    private String normalizeRequiredRange(String requestedRange) {
+        String trimmed = requestedRange.trim();
+        if (trimmed.startsWith("[") || trimmed.startsWith("(")) {
+            return trimmed;
+        }
+        return "[" + trimmed + ",)";
+    }
+
+    private Environment selectPreferredVersion(
+            List<Environment> candidates,
+            String attrKey,
+            String requestedVersion) {
+        int[] requested = parseVersion(requestedVersion);
+        List<Environment> sameMajor = filterByMajor(candidates, attrKey, requested[0]);
+        List<Environment> eligible = sameMajor.isEmpty() ? candidates : sameMajor;
+        return eligible.stream()
+                .min(
+                        Comparator.comparingInt((Environment env) -> toolVersionRank(env, attrKey, requested))
+                                .thenComparingInt(env -> toolVersionDistance(env, attrKey, requested))
+                                .thenComparing(simpleEnvironmentComparator()))
+                .orElseThrow();
+    }
+
+    private Environment selectHighestMavenVersion(List<Environment> candidates) {
+        return selectHighestVersion(preferDefaultMavenMajor(candidates), "MAVEN");
+    }
+
+    private List<Environment> preferDefaultMavenMajor(List<Environment> candidates) {
+        Integer defaultMajor = defaultMavenMajor();
+        if (defaultMajor == null) {
+            return candidates;
+        }
+        List<Environment> sameMajor = filterByMajor(candidates, "MAVEN", defaultMajor);
+        return sameMajor.isEmpty() ? candidates : sameMajor;
+    }
+
+    private Integer defaultMavenMajor() {
+        String defaultName = config.getDefaultValues().getEnvironmentName();
+        for (Environment environment : environments.values()) {
+            if (environment.getName().equals(defaultName)) {
+                String version = environment.getAttributes().get("MAVEN");
+                return version == null ? DEFAULT_MAVEN_MAJOR : parseVersion(version)[0];
+            }
+        }
+        return DEFAULT_MAVEN_MAJOR;
+    }
+
+    private List<Environment> filterByMajor(List<Environment> candidates, String attrKey, int major) {
+        return candidates.stream()
+                .filter(env -> parseVersion(toolVersion(env, attrKey))[0] == major)
+                .collect(Collectors.toList());
+    }
+
+    private Environment selectHighestVersion(List<Environment> candidates, String attrKey) {
+        return candidates.stream()
+                .min(
+                        Comparator.comparing(
+                                (Environment env) -> new ComparableVersion(toolVersion(env, attrKey)),
+                                Comparator.reverseOrder())
+                                .thenComparing(simpleEnvironmentComparator()))
+                .orElseThrow();
+    }
+
+    private Comparator<Environment> simpleEnvironmentComparator() {
+        return Comparator.comparingInt((Environment env) -> env.getAttributes().size())
+                .thenComparing(Environment::getName)
+                .thenComparing(Environment::getId);
+    }
+
+    private String toolVersion(Environment env, String attrKey) {
+        return env.getAttributes().getOrDefault(attrKey, "0");
     }
 
     private boolean matchesJdk(Environment env, JdkVersion jdkVersion) {
@@ -135,20 +262,6 @@ public class EnvironmentResolver {
             return attrs.containsKey("GRADLE");
         }
         return attrs.containsKey("MAVEN");
-    }
-
-    private Comparator<Environment> environmentComparator(ProjectBuildInfo buildInfo) {
-        Comparator<Environment> comparator = Comparator.comparingInt(env -> env.getAttributes().size());
-
-        if (buildInfo.getBuildToolVersion() != null) {
-            String attrKey = (buildInfo.getBuildType() == BuildType.GRADLE) ? "GRADLE" : "MAVEN";
-            int[] requested = parseVersion(buildInfo.getBuildToolVersion());
-            comparator = Comparator
-                    .comparingInt((Environment env) -> toolVersionRank(env, attrKey, requested))
-                    .thenComparingInt((Environment env) -> toolVersionDistance(env, attrKey, requested))
-                    .thenComparingInt(env -> env.getAttributes().size());
-        }
-        return comparator;
     }
 
     /**

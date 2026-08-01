@@ -121,6 +121,73 @@ class EnvironmentResolverTest {
     }
 
     @Test
+    void selectsHighestMavenVersionWhenNoVersionWasDetected() {
+        addEnv("1", "OpenJDK 17.0; Mvn 3.6.0", Map.of("JDK", "17.0", "MAVEN", "3.6.0", "OS", "Linux"));
+        addEnv("2", "OpenJDK 17.0; Mvn 3.9.9", Map.of("JDK", "17.0", "MAVEN", "3.9.9", "OS", "Linux"));
+        addEnv("3", "OpenJDK 17.0; Mvn 3.8.8", Map.of("JDK", "17.0", "MAVEN", "3.8.8", "OS", "Linux"));
+
+        EnvironmentResolver resolver = new EnvironmentResolver(environments, config);
+        ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
+                .jdkVersion(JdkVersion.JDK_17)
+                .buildType(BuildType.MVN)
+                .build();
+
+        Environment selected = resolver.selectEnvironment(buildInfo);
+        assertThat(selected.getId()).isEqualTo("2");
+    }
+
+    @Test
+    void doesNotAutomaticallyCrossFromDefaultMaven3ToMaven4() {
+        addEnv("0", "OpenJDK 11.0; Mvn 3.8.6", Map.of("JDK", "11.0", "MAVEN", "3.8.6", "OS", "Linux"));
+        addEnv("1", "OpenJDK 17.0; Mvn 3.9.9", Map.of("JDK", "17.0", "MAVEN", "3.9.9", "OS", "Linux"));
+        addEnv("2", "OpenJDK 17.0; Mvn 4.0.0", Map.of("JDK", "17.0", "MAVEN", "4.0.0", "OS", "Linux"));
+
+        EnvironmentResolver resolver = new EnvironmentResolver(environments, config);
+        ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
+                .jdkVersion(JdkVersion.JDK_17)
+                .buildType(BuildType.MVN)
+                .build();
+
+        Environment selected = resolver.selectEnvironment(buildInfo);
+        assertThat(selected.getId()).isEqualTo("1");
+    }
+
+    @Test
+    void selectsHighestMavenVersionSatisfyingRequiredRange() {
+        addEnv("1", "OpenJDK 17.0; Mvn 3.6.0", Map.of("JDK", "17.0", "MAVEN", "3.6.0", "OS", "Linux"));
+        addEnv("2", "OpenJDK 17.0; Mvn 3.6.3", Map.of("JDK", "17.0", "MAVEN", "3.6.3", "OS", "Linux"));
+        addEnv("3", "OpenJDK 17.0; Mvn 3.9.9", Map.of("JDK", "17.0", "MAVEN", "3.9.9", "OS", "Linux"));
+
+        EnvironmentResolver resolver = new EnvironmentResolver(environments, config);
+        ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
+                .jdkVersion(JdkVersion.JDK_17)
+                .buildType(BuildType.MVN)
+                .buildToolVersion("[3.6.3,)")
+                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .build();
+
+        Environment selected = resolver.selectEnvironment(buildInfo);
+        assertThat(selected.getId()).isEqualTo("3");
+    }
+
+    @Test
+    void honorsUpperBoundOfRequiredMavenRange() {
+        addEnv("1", "OpenJDK 17.0; Mvn 3.8.8", Map.of("JDK", "17.0", "MAVEN", "3.8.8", "OS", "Linux"));
+        addEnv("2", "OpenJDK 17.0; Mvn 3.9.9", Map.of("JDK", "17.0", "MAVEN", "3.9.9", "OS", "Linux"));
+
+        EnvironmentResolver resolver = new EnvironmentResolver(environments, config);
+        ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
+                .jdkVersion(JdkVersion.JDK_17)
+                .buildType(BuildType.MVN)
+                .buildToolVersion("[3.6.3,3.9.0)")
+                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .build();
+
+        Environment selected = resolver.selectEnvironment(buildInfo);
+        assertThat(selected.getId()).isEqualTo("1");
+    }
+
+    @Test
     void excludesDeprecatedEnvironments() {
         environments.put(
                 "1",

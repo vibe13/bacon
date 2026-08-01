@@ -171,6 +171,39 @@ class ProjectBuildInfoDetectorTest {
 
             assertThat(result.parsedPomDoc).isNotNull();
         }
+
+        @Test
+        void parsesSimpleEnforcerMavenVersionAsMinimumRange() {
+            String pom = "<project><build><plugins><plugin>"
+                    + "<artifactId>maven-enforcer-plugin</artifactId>"
+                    + "<configuration><rules><requireMavenVersion>"
+                    + "<version>3.6.3</version>"
+                    + "</requireMavenVersion></rules></configuration>"
+                    + "</plugin></plugins></build></project>";
+
+            ProjectBuildInfoDetector.ScmDetectionResult result = new ProjectBuildInfoDetector.ScmDetectionResult();
+            detector.parsePomXml(pom, result);
+
+            assertThat(detector.parseEnforcerMavenVersion(result.parsedPomDoc)).isEqualTo("[3.6.3,)");
+        }
+
+        @Test
+        void resolvesPropertyInEnforcerMavenVersionRange() {
+            String pom = "<project>"
+                    + "<properties><minimum.maven.version>3.6.3</minimum.maven.version></properties>"
+                    + "<build><plugins><plugin>"
+                    + "<artifactId>maven-enforcer-plugin</artifactId>"
+                    + "<configuration><rules><requireMavenVersion>"
+                    + "<version>[${minimum.maven.version},4.0.0)</version>"
+                    + "</requireMavenVersion></rules></configuration>"
+                    + "</plugin></plugins></build>"
+                    + "</project>";
+
+            ProjectBuildInfoDetector.ScmDetectionResult result = new ProjectBuildInfoDetector.ScmDetectionResult();
+            detector.parsePomXml(pom, result);
+
+            assertThat(detector.parseEnforcerMavenVersion(result.parsedPomDoc)).isEqualTo("[3.6.3,4.0.0)");
+        }
     }
 
     @Nested

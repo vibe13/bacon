@@ -44,6 +44,7 @@ public class ProjectBuildInfoDetector implements Closeable {
     private static final Pattern GRADLE_WRAPPER_VERSION = Pattern.compile("gradle-(\\d+\\.\\d+(?:\\.\\d+)?)-");
     private static final Pattern MAVEN_WRAPPER_VERSION = Pattern
             .compile("apache-maven-(\\d+\\.\\d+(?:\\.\\d+)?)-");
+    private static final Pattern POM_PROPERTY = Pattern.compile("\\$\\{([^}]+)}");
     private static final Pattern DOCKERFILE_JDK = Pattern
             .compile("(?i)FROM.*(?:jdk|openjdk)[:-]?(\\d+)");
     private static final Pattern GITHUB_ACTIONS_JAVA = Pattern
@@ -75,6 +76,7 @@ public class ProjectBuildInfoDetector implements Closeable {
         String source = "default";
         BuildType buildType = BuildType.MVN;
         String buildToolVersion = null;
+        BuildToolVersionConstraint buildToolVersionConstraint = null;
 
         jdk = detectFromManifest(project);
         if (jdk != null) {
@@ -88,6 +90,7 @@ public class ProjectBuildInfoDetector implements Closeable {
             }
             if (scmResult.buildToolVersion != null) {
                 buildToolVersion = scmResult.buildToolVersion;
+                buildToolVersionConstraint = scmResult.buildToolVersionConstraint;
             }
             if (jdk == null && scmResult.jdkVersion != null) {
                 jdk = scmResult.jdkVersion;
@@ -102,17 +105,19 @@ public class ProjectBuildInfoDetector implements Closeable {
         }
 
         log.info(
-                "Detected build info for {}: JDK={}, buildType={}, toolVersion={}, source={}",
+                "Detected build info for {}: JDK={}, buildType={}, toolVersion={}, constraint={}, source={}",
                 project.getFirstGAV(),
                 jdk,
                 buildType,
                 buildToolVersion,
+                buildToolVersionConstraint,
                 source);
 
         return ProjectBuildInfo.builder()
                 .jdkVersion(jdk)
                 .buildType(buildType)
                 .buildToolVersion(buildToolVersion)
+                .buildToolVersionConstraint(buildToolVersionConstraint)
                 .detectionSource(source)
                 .build();
     }
@@ -340,16 +345,20 @@ public class ProjectBuildInfoDetector implements Closeable {
             Matcher m = MAVEN_WRAPPER_VERSION.matcher(wrapperProps.get());
             if (m.find()) {
                 result.buildToolVersion = m.group(1);
+                result.buildToolVersionConstraint = BuildToolVersionConstraint.PREFERRED;
                 return;
             }
         }
 
         if (result.parsedPomDoc != null) {
             result.buildToolVersion = parseEnforcerMavenVersion(result.parsedPomDoc);
+            if (result.buildToolVersion != null) {
+                result.buildToolVersionConstraint = BuildToolVersionConstraint.REQUIRED_RANGE;
+            }
         }
     }
 
-    private String parseEnforcerMavenVersion(Document doc) {
+    String parseEnforcerMavenVersion(Document doc) {
         NodeList plugins = doc.getElementsByTagName("plugin");
         for (int i = 0; i < plugins.getLength(); i++) {
             Element plugin = (Element) plugins.item(i);
@@ -361,17 +370,61 @@ public class ProjectBuildInfoDetector implements Closeable {
                     Element req = (Element) requireMaven.item(0);
                     NodeList versions = req.getElementsByTagName("version");
                     if (versions.getLength() > 0) {
-                        String version = versions.item(0).getTextContent().trim();
-                        version = version.replaceAll("[\\[\\]()\\s,]", "");
-                        Matcher m = Pattern.compile("(\\d+\\.\\d+(?:\\.\\d+)?)").matcher(version);
-                        if (m.find()) {
-                            return m.group(1);
-                        }
+                        String version = resolvePomProperties(doc, versions.item(0).getTextContent().trim());
+                        return normalizeMavenVersionRange(version);
                     }
                 }
             }
         }
         return null;
+    }
+
+    private String resolvePomProperties(Document doc, String value) {
+        String resolved = value;
+        for (int pass = 0; pass < 5; pass++) {
+            Matcher matcher = POM_PROPERTY.matcher(resolved);
+            StringBuffer replacement = new StringBuffer();
+            boolean changed = false;
+            while (matcher.find()) {
+                String propertyValue = findPomProperty(doc, matcher.group(1));
+                if (propertyValue == null) {
+                    matcher.appendReplacement(replacement, Matcher.quoteReplacement(matcher.group(0)));
+                } else {
+                    matcher.appendReplacement(replacement, Matcher.quoteReplacement(propertyValue));
+                    changed = true;
+                }
+            }
+            matcher.appendTail(replacement);
+            resolved = replacement.toString();
+            if (!changed) {
+                break;
+            }
+        }
+        return resolved;
+    }
+
+    private String findPomProperty(Document doc, String propertyName) {
+        NodeList properties = doc.getElementsByTagName("properties");
+        for (int i = 0; i < properties.getLength(); i++) {
+            Element propertyContainer = (Element) properties.item(i);
+            NodeList property = propertyContainer.getElementsByTagName(propertyName);
+            if (property.getLength() > 0) {
+                return property.item(0).getTextContent().trim();
+            }
+        }
+        return null;
+    }
+
+    private String normalizeMavenVersionRange(String version) {
+        String trimmed = version == null ? "" : version.trim();
+        if (trimmed.isEmpty() || POM_PROPERTY.matcher(trimmed).find()) {
+            return null;
+        }
+        if (trimmed.startsWith("[") || trimmed.startsWith("(")) {
+            return trimmed;
+        }
+        Matcher matcher = Pattern.compile("^\\d+(?:\\.\\d+){1,2}(?:[-.][A-Za-z0-9]+)*$").matcher(trimmed);
+        return matcher.matches() ? "[" + trimmed + ",)" : null;
     }
 
     private void detectGradleVersion(String scmUrl, String revision, ScmDetectionResult result) {
@@ -384,6 +437,7 @@ public class ProjectBuildInfoDetector implements Closeable {
             Matcher m = GRADLE_WRAPPER_VERSION.matcher(wrapperProps.get());
             if (m.find()) {
                 result.buildToolVersion = m.group(1);
+                result.buildToolVersionConstraint = BuildToolVersionConstraint.PREFERRED;
             }
         }
     }
@@ -459,6 +513,7 @@ public class ProjectBuildInfoDetector implements Closeable {
         JdkVersion jdkVersion;
         BuildType buildType;
         String buildToolVersion;
+        BuildToolVersionConstraint buildToolVersionConstraint;
         String detectionSource;
         Document parsedPomDoc;
     }
