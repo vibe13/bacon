@@ -82,6 +82,55 @@ public class BuildConfigGeneratorTest {
     }
 
     @Test
+    public void reselectsUsingOriginalDeprecatedEnvironmentAsVersionFloor() {
+        BuildConfigGeneratorConfig config = new BuildConfigGeneratorConfig();
+        EnvironmentResolver environmentResolver = mock(EnvironmentResolver.class);
+        ProjectBuildInfoDetector detector = mock(ProjectBuildInfoDetector.class);
+        BuildConfigGenerator generator = new BuildConfigGenerator(config, environmentResolver, detector);
+
+        Project project = mock(Project.class);
+        ProjectBuildInfo detected = ProjectBuildInfo.builder()
+                .jdkVersion(JdkVersion.JDK_11)
+                .buildType(BuildType.MVN)
+                .buildToolVersion("[3.6.3,)")
+                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .detectionSource("pom.xml")
+                .build();
+        when(detector.detect(project)).thenReturn(detected);
+
+        Environment original = Environment.builder()
+                .id("old")
+                .name("OracleJDK8u192; Mvn 3.5.4")
+                .deprecated(true)
+                .hidden(false)
+                .attributes(Map.of("JDK", "1.8", "MAVEN", "3.5.4"))
+                .build();
+        Environment automaticReplacement = environment(
+                "922",
+                "OpenJDK 1.8; OpenJDK 11; OpenJDK 17; Mvn 3.9.12; Gradle 8.14.4",
+                "1.8",
+                "3.9.12");
+        Environment conservativeReplacement = environment(
+                "600",
+                "OpenJDK 1.8; Mvn 3.6.3",
+                "1.8",
+                "3.6.3");
+        when(environmentResolver.resolve(original)).thenReturn(automaticReplacement);
+        when(environmentResolver.selectEnvironment(any(), same(original))).thenReturn(conservativeReplacement);
+
+        BuildConfig buildConfig = new BuildConfig();
+        buildConfig.setName("commons-parent-97");
+        buildConfig.setBuildType("MVN");
+        buildConfig.setBuildScript("mvn clean deploy");
+        buildConfig.setEnvironmentName(automaticReplacement.getName());
+
+        boolean changed = generator.reselectEnvironment(buildConfig, project, original);
+
+        assertThat(changed).isTrue();
+        assertThat(buildConfig.getEnvironmentName()).isEqualTo(conservativeReplacement.getName());
+    }
+
+    @Test
     public void keepsExistingJdkWhenScmDetectionSuggestsDifferentJdk() {
         BuildConfigGeneratorConfig config = new BuildConfigGeneratorConfig();
         EnvironmentResolver environmentResolver = mock(EnvironmentResolver.class);

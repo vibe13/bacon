@@ -188,6 +188,42 @@ class ProjectBuildInfoDetectorTest {
         }
 
         @Test
+        void parsesCommonsParentMinimumMavenBuildVersionProperty() {
+            String pom = "<project><properties>"
+                    + "<minimalMavenBuildVersion>3.8.1</minimalMavenBuildVersion>"
+                    + "</properties></project>";
+
+            ProjectBuildInfoDetector.ScmDetectionResult result = new ProjectBuildInfoDetector.ScmDetectionResult();
+            detector.parsePomXml(pom, result);
+
+            assertThat(detector.parseDeclaredMinimumMavenVersion(result.parsedPomDoc)).isEqualTo("[3.8.1,)");
+        }
+
+        @Test
+        void derivesMavenRequirementFromEnforcerPluginVersion() {
+            String pom = "<project>"
+                    + "<properties><enforcer.version>3.6.2</enforcer.version></properties>"
+                    + "<build><plugins><plugin>"
+                    + "<groupId>org.apache.maven.plugins</groupId>"
+                    + "<artifactId>maven-enforcer-plugin</artifactId>"
+                    + "<version>${enforcer.version}</version>"
+                    + "</plugin></plugins></build>"
+                    + "</project>";
+
+            ProjectBuildInfoDetector.ScmDetectionResult result = new ProjectBuildInfoDetector.ScmDetectionResult();
+            detector.parsePomXml(pom, result);
+
+            assertThat(detector.parseEnforcerPluginMavenPrerequisite(result.parsedPomDoc))
+                    .isEqualTo("[3.6.3,)");
+        }
+
+        @Test
+        void choosesStrongestDetectedMavenRequirement() {
+            assertThat(detector.strongestMavenRequirement("[3.6.3,)", "[3.8.1,)", "[3.2.5,)"))
+                    .isEqualTo("[3.8.1,)");
+        }
+
+        @Test
         void resolvesPropertyInEnforcerMavenVersionRange() {
             String pom = "<project>"
                     + "<properties><minimum.maven.version>3.6.3</minimum.maven.version></properties>"

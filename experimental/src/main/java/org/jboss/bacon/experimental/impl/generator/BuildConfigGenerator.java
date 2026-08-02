@@ -97,15 +97,15 @@ public class BuildConfigGenerator {
         Environment existingEnvironment = null;
         // Strategy
         if (found.isManaged()) {
-            existingEnvironment = environments.resolve(found.getBuildConfig().getEnvironment());
+            existingEnvironment = found.getBuildConfig().getEnvironment();
             buildConfig = copyManaged(found.getBuildConfig(), name);
             buildConfig = updateExactMatch(buildConfig, project);
         } else if (found.isExactMatch()) {
-            existingEnvironment = environments.resolve(found.getBuildConfigRevision().getEnvironment());
+            existingEnvironment = found.getBuildConfigRevision().getEnvironment();
             buildConfig = copyExisting(found.getBuildConfig(), found.getBuildConfigRevision(), name);
             buildConfig = updateExactMatch(buildConfig, project);
         } else if (found.isFound()) {
-            existingEnvironment = environments.resolve(found.getBuildConfigRevision().getEnvironment());
+            existingEnvironment = found.getBuildConfigRevision().getEnvironment();
             buildConfig = copyExisting(found.getBuildConfig(), found.getBuildConfigRevision(), name);
             buildConfig = updateSimilar(buildConfig, project);
         } else {
@@ -122,11 +122,14 @@ public class BuildConfigGenerator {
         ProjectBuildInfo detected = buildInfoDetector.detect(project);
         ProjectBuildInfo effective = buildInfoForExistingBuildConfig(detected, buildConfig, existingEnvironment);
         Environment selected = environments.selectEnvironment(effective, existingEnvironment);
+        Environment currentEnvironment = existingEnvironment.isDeprecated()
+                ? environments.resolve(existingEnvironment)
+                : existingEnvironment;
 
-        if (selected.getId().equals(existingEnvironment.getId())) {
+        if (selected.getId().equals(currentEnvironment.getId())) {
             log.info(
                     "Environment detection kept '{}' for existing Build Config {}",
-                    existingEnvironment.getName(),
+                    currentEnvironment.getName(),
                     buildConfig.getName());
             return false;
         }
@@ -134,7 +137,7 @@ public class BuildConfigGenerator {
         log.info(
                 "Reselecting environment for existing Build Config {}: '{}' -> '{}'",
                 buildConfig.getName(),
-                existingEnvironment.getName(),
+                currentEnvironment.getName(),
                 selected.getName());
         buildConfig.setEnvironmentId(null);
         buildConfig.setSystemImageId(null);

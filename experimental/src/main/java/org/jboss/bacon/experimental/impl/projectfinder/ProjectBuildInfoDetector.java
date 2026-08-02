@@ -20,6 +20,7 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.util.EntityUtils;
+import org.apache.maven.artifact.versioning.ComparableVersion;
 import org.jboss.bacon.experimental.impl.dependencies.Project;
 import org.jboss.da.model.rest.GAV;
 import org.jboss.pnc.api.enums.BuildType;
@@ -351,7 +352,10 @@ public class ProjectBuildInfoDetector implements Closeable {
         }
 
         if (result.parsedPomDoc != null) {
-            result.buildToolVersion = parseEnforcerMavenVersion(result.parsedPomDoc);
+            result.buildToolVersion = strongestMavenRequirement(
+                    parseEnforcerMavenVersion(result.parsedPomDoc),
+                    parseDeclaredMinimumMavenVersion(result.parsedPomDoc),
+                    parseEnforcerPluginMavenPrerequisite(result.parsedPomDoc));
             if (result.buildToolVersion != null) {
                 result.buildToolVersionConstraint = BuildToolVersionConstraint.REQUIRED_RANGE;
             }
@@ -377,6 +381,124 @@ public class ProjectBuildInfoDetector implements Closeable {
             }
         }
         return null;
+    }
+
+    String parseDeclaredMinimumMavenVersion(Document doc) {
+        String strongest = null;
+        NodeList properties = doc.getElementsByTagName("properties");
+        for (int i = 0; i < properties.getLength(); i++) {
+            NodeList children = properties.item(i).getChildNodes();
+            for (int j = 0; j < children.getLength(); j++) {
+                if (!(children.item(j) instanceof Element)) {
+                    continue;
+                }
+                Element property = (Element) children.item(j);
+                String normalizedName = property.getTagName().toLowerCase().replaceAll("[^a-z0-9]", "");
+                boolean minimumMavenProperty = normalizedName.contains("maven")
+                        && normalizedName.contains("version")
+                        && (normalizedName.contains("minimum")
+                                || normalizedName.contains("minimal")
+                                || normalizedName.contains("required"));
+                if (!minimumMavenProperty) {
+                    continue;
+                }
+                String value = resolvePomProperties(doc, property.getTextContent().trim());
+                strongest = strongestMavenRequirement(strongest, normalizeMavenVersionRange(value));
+            }
+        }
+        return strongest;
+    }
+
+    String parseEnforcerPluginMavenPrerequisite(Document doc) {
+        String pluginVersion = findPluginVersion(doc, "maven-enforcer-plugin");
+        if (pluginVersion == null) {
+            return null;
+        }
+
+        ComparableVersion version = new ComparableVersion(pluginVersion);
+        if (isVersionBetween(version, "3.5.0", "3.6.3")) {
+            return "[3.6.3,)";
+        }
+        if (isVersionBetween(version, "3.1.0", "3.4.1")) {
+            return "[3.2.5,)";
+        }
+        if (version.compareTo(new ComparableVersion("3.0.0")) == 0) {
+            return "[3.1.1,)";
+        }
+        if (isVersionBetween(version, "3.0.0-M1", "3.0.0-M3")) {
+            return "[2.2.1,)";
+        }
+        if (isVersionBetween(version, "1.4", "1.4.1")) {
+            return "[2.2.1,)";
+        }
+        if (isVersionBetween(version, "1.0", "1.1.1")) {
+            return "[2.0.6,)";
+        }
+        return null;
+    }
+
+    private String findPluginVersion(Document doc, String wantedArtifactId) {
+        NodeList plugins = doc.getElementsByTagName("plugin");
+        for (int i = 0; i < plugins.getLength(); i++) {
+            Element plugin = (Element) plugins.item(i);
+            String artifactId = directChildText(plugin, "artifactId");
+            if (!wantedArtifactId.equals(artifactId)) {
+                continue;
+            }
+            String version = directChildText(plugin, "version");
+            if (version != null) {
+                String resolved = resolvePomProperties(doc, version);
+                return POM_PROPERTY.matcher(resolved).find() ? null : resolved;
+            }
+        }
+        return null;
+    }
+
+    private String directChildText(Element parent, String tagName) {
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            if (children.item(i) instanceof Element) {
+                Element child = (Element) children.item(i);
+                if (tagName.equals(child.getTagName())) {
+                    return child.getTextContent().trim();
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean isVersionBetween(ComparableVersion version, String lowerInclusive, String upperInclusive) {
+        return version.compareTo(new ComparableVersion(lowerInclusive)) >= 0
+                && version.compareTo(new ComparableVersion(upperInclusive)) <= 0;
+    }
+
+    String strongestMavenRequirement(String... requirements) {
+        String strongest = null;
+        ComparableVersion strongestMinimum = null;
+        for (String requirement : requirements) {
+            String minimum = minimumVersion(requirement);
+            if (minimum == null) {
+                continue;
+            }
+            ComparableVersion candidate = new ComparableVersion(minimum);
+            if (strongestMinimum == null || candidate.compareTo(strongestMinimum) > 0) {
+                strongest = requirement;
+                strongestMinimum = candidate;
+            }
+        }
+        return strongest;
+    }
+
+    private String minimumVersion(String requirement) {
+        if (requirement == null || requirement.isBlank()) {
+            return null;
+        }
+        String normalized = normalizeMavenVersionRange(requirement);
+        if (normalized == null) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile("^[\\[(]\\s*([^,\\])]+)").matcher(normalized);
+        return matcher.find() ? matcher.group(1).trim() : null;
     }
 
     private String resolvePomProperties(Document doc, String value) {

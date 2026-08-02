@@ -129,8 +129,7 @@ public class EnvironmentResolver {
 
         if (existingEnvironment != null
                 && candidates.stream().anyMatch(candidate -> candidate.getId().equals(existingEnvironment.getId()))
-                && existingEnvironmentSatisfiesConstraint(existingEnvironment, buildInfo)
-                && !isBundledEnvironment(existingEnvironment, buildInfo.getBuildType())) {
+                && existingEnvironmentSatisfiesConstraint(existingEnvironment, buildInfo)) {
             log.info(
                     "Keeping compatible existing environment '{}' for build info (JDK={}, type={}, toolVersion={}, constraint={})",
                     existingEnvironment.getName(),
@@ -139,6 +138,10 @@ public class EnvironmentResolver {
                     buildInfo.getBuildToolVersion(),
                     buildInfo.getBuildToolVersionConstraint());
             return existingEnvironment;
+        }
+
+        if (existingEnvironment != null) {
+            candidates = avoidToolDowngrade(candidates, buildInfo.getBuildType(), existingEnvironment);
         }
 
         Environment selected = selectBestEnvironment(candidates, buildInfo);
@@ -163,6 +166,10 @@ public class EnvironmentResolver {
         if (requestedVersion != null) {
             return selectPreferredVersion(candidates, attrKey, requestedVersion);
         }
+        if (buildInfo.getBuildType() == BuildType.MVN) {
+            List<Environment> compatible = preferDefaultMavenMajor(candidates);
+            return selectLowestVersion(preferSimpleEnvironments(compatible, buildInfo.getBuildType()), attrKey);
+        }
         return candidates.stream().min(simpleEnvironmentComparator(buildInfo.getBuildType())).orElseThrow();
     }
 
@@ -180,6 +187,7 @@ public class EnvironmentResolver {
                 List<Environment> compatible = "MAVEN".equals(attrKey)
                         ? preferDefaultMavenMajor(satisfying)
                         : satisfying;
+                compatible = preferSimpleEnvironments(compatible, buildTypeForAttribute(attrKey));
                 return selectLowestVersion(compatible, attrKey);
             }
             log.warn(
@@ -195,6 +203,45 @@ public class EnvironmentResolver {
         return "MAVEN".equals(attrKey)
                 ? selectHighestMavenVersion(candidates)
                 : selectHighestVersion(candidates, attrKey);
+    }
+
+
+    private List<Environment> preferSimpleEnvironments(List<Environment> candidates, BuildType buildType) {
+        List<Environment> simple = candidates.stream()
+                .filter(environment -> !isBundledEnvironment(environment, buildType))
+                .collect(Collectors.toList());
+        if (!simple.isEmpty()) {
+            return simple;
+        }
+        log.warn(
+                "No simple {} environment is available for the detected JDK; bundled environments remain eligible.",
+                buildType);
+        return candidates;
+    }
+
+    private List<Environment> avoidToolDowngrade(
+            List<Environment> candidates,
+            BuildType buildType,
+            Environment existingEnvironment) {
+        String attrKey = buildType == BuildType.GRADLE ? "GRADLE" : "MAVEN";
+        String existingVersion = toolVersion(existingEnvironment, attrKey);
+        if (existingVersion == null || "0".equals(existingVersion)) {
+            return candidates;
+        }
+
+        ComparableVersion floor = new ComparableVersion(existingVersion);
+        List<Environment> notOlder = candidates.stream()
+                .filter(environment -> new ComparableVersion(toolVersion(environment, attrKey)).compareTo(floor) >= 0)
+                .collect(Collectors.toList());
+        if (!notOlder.isEmpty()) {
+            return notOlder;
+        }
+
+        log.warn(
+                "No active {} environment is at least as new as existing version {}. Keeping older candidates only as a last resort.",
+                attrKey,
+                existingVersion);
+        return candidates;
     }
 
     private boolean existingEnvironmentSatisfiesConstraint(

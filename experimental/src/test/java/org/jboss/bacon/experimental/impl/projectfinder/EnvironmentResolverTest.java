@@ -371,7 +371,7 @@ class EnvironmentResolverTest {
     }
 
     @Test
-    void replacesBundledExistingEnvironmentWithSimplerMinimumCompatibleEnvironment() {
+    void keepsActiveBundledEnvironmentWhenItAlreadySatisfiesRequirement() {
         Environment bundled = buildEnv(
                 "1",
                 "OpenJDK 1.8; OpenJDK 11; OpenJDK 17; Mvn 3.9.12; Gradle 8.14.4",
@@ -388,7 +388,64 @@ class EnvironmentResolverTest {
                 .build();
 
         Environment selected = resolver.selectEnvironment(buildInfo, bundled);
-        assertThat(selected.getId()).isEqualTo("2");
+        assertThat(selected.getId()).isEqualTo("1");
+    }
+
+    @Test
+    void deprecatedExistingEnvironmentNeverDowngradesMaven() {
+        Environment deprecated = Environment.builder()
+                .id("old")
+                .name("OracleJDK8u192; Mvn 3.5.4")
+                .deprecated(true)
+                .hidden(false)
+                .attributes(Map.of("JDK", "1.8", "MAVEN", "3.5.4"))
+                .build();
+        addEnv(
+                "570",
+                "OpenJDK 1.8; Mvn 3.3.9; Gcc; Make; Cmake3; Protobuf",
+                Map.of("JDK", "1.8", "MAVEN", "3.3.9", "GCC", "1", "CMAKE", "3"));
+        addEnv("600", "OpenJDK 1.8; Mvn 3.6.3", Map.of("JDK", "1.8", "MAVEN", "3.6.3"));
+        addEnv(
+                "922",
+                "OpenJDK 1.8; OpenJDK 11; OpenJDK 17; Mvn 3.9.12; Gradle 8.14.4",
+                Map.of("JDK", "1.8", "MAVEN", "3.9.12", "GRADLE", "8.14.4"));
+
+        EnvironmentResolver resolver = new EnvironmentResolver(environments, config);
+        ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
+                .jdkVersion(JdkVersion.JDK_1_8)
+                .buildType(BuildType.MVN)
+                .build();
+
+        Environment selected = resolver.selectEnvironment(buildInfo, deprecated);
+        assertThat(selected.getId()).isEqualTo("600");
+    }
+
+    @Test
+    void commonsParentMinimumSelectsSmallestSimpleCompatibleEnvironment() {
+        Environment deprecated = Environment.builder()
+                .id("old")
+                .name("OracleJDK8u192; Mvn 3.5.4")
+                .deprecated(true)
+                .hidden(false)
+                .attributes(Map.of("JDK", "1.8", "MAVEN", "3.5.4"))
+                .build();
+        addEnv("600", "OpenJDK 1.8; Mvn 3.6.3", Map.of("JDK", "1.8", "MAVEN", "3.6.3"));
+        addEnv("700", "OpenJDK 1.8; Mvn 3.9.0", Map.of("JDK", "1.8", "MAVEN", "3.9.0"));
+        addEnv(
+                "922",
+                "OpenJDK 1.8; OpenJDK 11; OpenJDK 17; Mvn 3.9.12; Gradle 8.14.4",
+                Map.of("JDK", "1.8", "MAVEN", "3.9.12", "GRADLE", "8.14.4"));
+
+        EnvironmentResolver resolver = new EnvironmentResolver(environments, config);
+        ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
+                .jdkVersion(JdkVersion.JDK_1_8)
+                .buildType(BuildType.MVN)
+                .buildToolVersion("[3.8.1,)")
+                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .build();
+
+        Environment selected = resolver.selectEnvironment(buildInfo, deprecated);
+        assertThat(selected.getId()).isEqualTo("700");
     }
 
     @Test
