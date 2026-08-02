@@ -3,6 +3,7 @@ package org.jboss.bacon.experimental.impl.generator;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.same;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -64,7 +65,7 @@ public class BuildConfigGeneratorTest {
 
         Environment oldEnvironment = environment("1", "OpenJDK 11.0; Mvn 3.5.4", "11", "3.5.4");
         Environment newEnvironment = environment("2", "OpenJDK 11.0; Mvn 3.9.6", "11", "3.9.6");
-        when(environmentResolver.selectEnvironment(any())).thenReturn(newEnvironment);
+        when(environmentResolver.selectEnvironment(any(), same(oldEnvironment))).thenReturn(newEnvironment);
 
         BuildConfig buildConfig = new BuildConfig();
         buildConfig.setName("jackson-parent-2.21");
@@ -81,7 +82,7 @@ public class BuildConfigGeneratorTest {
     }
 
     @Test
-    public void keepsExistingJdkWhenDetectionUsesDefault() {
+    public void keepsExistingJdkWhenScmDetectionSuggestsDifferentJdk() {
         BuildConfigGeneratorConfig config = new BuildConfigGeneratorConfig();
         EnvironmentResolver environmentResolver = mock(EnvironmentResolver.class);
         ProjectBuildInfoDetector detector = mock(ProjectBuildInfoDetector.class);
@@ -89,14 +90,16 @@ public class BuildConfigGeneratorTest {
 
         Project project = mock(Project.class);
         ProjectBuildInfo detected = ProjectBuildInfo.builder()
-                .jdkVersion(JdkVersion.JDK_11)
+                .jdkVersion(JdkVersion.JDK_17)
                 .buildType(BuildType.MVN)
-                .detectionSource("default (no JDK version detected)")
+                .buildToolVersion("[3.6.3,)")
+                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .detectionSource("MANIFEST.MF from Maven Central")
                 .build();
         when(detector.detect(project)).thenReturn(detected);
 
-        Environment existing = environment("1", "OpenJDK 1.8; Mvn 3.5.4", "1.8.0", "3.5.4");
-        when(environmentResolver.selectEnvironment(any())).thenReturn(existing);
+        Environment existing = environment("1", "OpenJDK 11.0; Mvn 3.5.4", "11", "3.5.4");
+        when(environmentResolver.selectEnvironment(any(), same(existing))).thenReturn(existing);
 
         BuildConfig buildConfig = new BuildConfig();
         buildConfig.setName("example");
@@ -106,8 +109,8 @@ public class BuildConfigGeneratorTest {
         generator.reselectEnvironment(buildConfig, project, existing);
 
         ArgumentCaptor<ProjectBuildInfo> captor = ArgumentCaptor.forClass(ProjectBuildInfo.class);
-        verify(environmentResolver).selectEnvironment(captor.capture());
-        assertThat(captor.getValue().getJdkVersion()).isEqualTo(JdkVersion.JDK_1_8);
+        verify(environmentResolver).selectEnvironment(captor.capture(), same(existing));
+        assertThat(captor.getValue().getJdkVersion()).isEqualTo(JdkVersion.JDK_11);
         assertThat(captor.getValue().getBuildType()).isEqualTo(BuildType.MVN);
     }
 

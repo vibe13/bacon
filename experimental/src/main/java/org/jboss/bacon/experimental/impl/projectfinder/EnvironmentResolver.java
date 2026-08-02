@@ -5,6 +5,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.apache.maven.artifact.versioning.ComparableVersion;
@@ -99,6 +101,16 @@ public class EnvironmentResolver {
     }
 
     public Environment selectEnvironment(ProjectBuildInfo buildInfo) {
+        return selectEnvironment(buildInfo, null);
+    }
+
+    /**
+     * Selects an environment while retaining an already compatible existing
+     * environment whenever possible. This keeps environment reselection focused
+     * on fixing an actual tool-version incompatibility instead of upgrading every
+     * existing BuildConfig to the newest available toolchain.
+     */
+    public Environment selectEnvironment(ProjectBuildInfo buildInfo, Environment existingEnvironment) {
         List<Environment> candidates = environments.values()
                 .stream()
                 .filter(env -> !env.isDeprecated())
@@ -113,6 +125,20 @@ public class EnvironmentResolver {
                     buildInfo.getJdkVersion(),
                     buildInfo.getBuildType());
             return findByName(config.getDefaultValues().getEnvironmentName());
+        }
+
+        if (existingEnvironment != null
+                && candidates.stream().anyMatch(candidate -> candidate.getId().equals(existingEnvironment.getId()))
+                && existingEnvironmentSatisfiesConstraint(existingEnvironment, buildInfo)
+                && !isBundledEnvironment(existingEnvironment, buildInfo.getBuildType())) {
+            log.info(
+                    "Keeping compatible existing environment '{}' for build info (JDK={}, type={}, toolVersion={}, constraint={})",
+                    existingEnvironment.getName(),
+                    buildInfo.getJdkVersion(),
+                    buildInfo.getBuildType(),
+                    buildInfo.getBuildToolVersion(),
+                    buildInfo.getBuildToolVersionConstraint());
+            return existingEnvironment;
         }
 
         Environment selected = selectBestEnvironment(candidates, buildInfo);
@@ -132,18 +158,15 @@ public class EnvironmentResolver {
         BuildToolVersionConstraint constraint = buildInfo.getBuildToolVersionConstraint();
 
         if (constraint == BuildToolVersionConstraint.REQUIRED_RANGE && requestedVersion != null) {
-            return selectHighestSatisfyingRange(candidates, attrKey, requestedVersion);
+            return selectLowestSatisfyingRange(candidates, attrKey, requestedVersion);
         }
         if (requestedVersion != null) {
             return selectPreferredVersion(candidates, attrKey, requestedVersion);
         }
-        if (buildInfo.getBuildType() == BuildType.MVN) {
-            return selectHighestMavenVersion(candidates);
-        }
-        return candidates.stream().min(simpleEnvironmentComparator()).orElseThrow();
+        return candidates.stream().min(simpleEnvironmentComparator(buildInfo.getBuildType())).orElseThrow();
     }
 
-    private Environment selectHighestSatisfyingRange(
+    private Environment selectLowestSatisfyingRange(
             List<Environment> candidates,
             String attrKey,
             String requestedRange) {
@@ -157,7 +180,7 @@ public class EnvironmentResolver {
                 List<Environment> compatible = "MAVEN".equals(attrKey)
                         ? preferDefaultMavenMajor(satisfying)
                         : satisfying;
-                return selectHighestVersion(compatible, attrKey);
+                return selectLowestVersion(compatible, attrKey);
             }
             log.warn(
                     "No environment satisfies required {} version range {}. Selecting the highest available compatible environment.",
@@ -172,6 +195,34 @@ public class EnvironmentResolver {
         return "MAVEN".equals(attrKey)
                 ? selectHighestMavenVersion(candidates)
                 : selectHighestVersion(candidates, attrKey);
+    }
+
+    private boolean existingEnvironmentSatisfiesConstraint(
+            Environment existingEnvironment,
+            ProjectBuildInfo buildInfo) {
+        String requestedVersion = buildInfo.getBuildToolVersion();
+        if (requestedVersion == null || requestedVersion.isBlank()) {
+            return true;
+        }
+
+        String attrKey = buildInfo.getBuildType() == BuildType.GRADLE ? "GRADLE" : "MAVEN";
+        String existingVersion = toolVersion(existingEnvironment, attrKey);
+        if (existingVersion == null || "0".equals(existingVersion)) {
+            return false;
+        }
+
+        if (buildInfo.getBuildToolVersionConstraint() == BuildToolVersionConstraint.REQUIRED_RANGE) {
+            try {
+                VersionRange range = VersionRange.createFromVersionSpec(normalizeRequiredRange(requestedVersion));
+                return range.containsVersion(new DefaultArtifactVersion(existingVersion));
+            } catch (InvalidVersionSpecificationException e) {
+                return false;
+            }
+        }
+
+        int[] requested = parseVersion(requestedVersion);
+        int[] existing = parseVersion(existingVersion);
+        return requested[0] == existing[0] && compareVersions(existing, requested) >= 0;
     }
 
     private String normalizeRequiredRange(String requestedRange) {
@@ -193,7 +244,7 @@ public class EnvironmentResolver {
                 .min(
                         Comparator.comparingInt((Environment env) -> toolVersionRank(env, attrKey, requested))
                                 .thenComparingInt(env -> toolVersionDistance(env, attrKey, requested))
-                                .thenComparing(simpleEnvironmentComparator()))
+                                .thenComparing(simpleEnvironmentComparator(buildTypeForAttribute(attrKey))))
                 .orElseThrow();
     }
 
@@ -233,14 +284,54 @@ public class EnvironmentResolver {
                         Comparator.comparing(
                                 (Environment env) -> new ComparableVersion(toolVersion(env, attrKey)),
                                 Comparator.reverseOrder())
-                                .thenComparing(simpleEnvironmentComparator()))
+                                .thenComparing(simpleEnvironmentComparator(buildTypeForAttribute(attrKey))))
                 .orElseThrow();
     }
 
-    private Comparator<Environment> simpleEnvironmentComparator() {
-        return Comparator.comparingInt((Environment env) -> env.getAttributes().size())
+    private Environment selectLowestVersion(List<Environment> candidates, String attrKey) {
+        return candidates.stream()
+                .min(
+                        Comparator.comparing(
+                                (Environment env) -> new ComparableVersion(toolVersion(env, attrKey)))
+                                .thenComparing(simpleEnvironmentComparator(buildTypeForAttribute(attrKey))))
+                .orElseThrow();
+    }
+
+    private Comparator<Environment> simpleEnvironmentComparator(BuildType buildType) {
+        return Comparator.comparingInt((Environment env) -> environmentComplexity(env, buildType))
+                .thenComparingInt(env -> env.getAttributes().size())
                 .thenComparing(Environment::getName)
                 .thenComparing(Environment::getId);
+    }
+
+    private BuildType buildTypeForAttribute(String attrKey) {
+        return "GRADLE".equals(attrKey) ? BuildType.GRADLE : BuildType.MVN;
+    }
+
+    private int environmentComplexity(Environment environment, BuildType buildType) {
+        int complexity = 0;
+        if (isBundledEnvironment(environment, buildType)) {
+            complexity += 100;
+        }
+        return complexity;
+    }
+
+    private boolean isBundledEnvironment(Environment environment, BuildType buildType) {
+        if (buildType == BuildType.MVN && environment.getAttributes().containsKey("GRADLE")) {
+            return true;
+        }
+        String name = environment.getName();
+        if (name == null) {
+            return false;
+        }
+        Matcher matcher = Pattern.compile("(?i)OpenJDK").matcher(name);
+        int jdkCount = 0;
+        while (matcher.find()) {
+            if (++jdkCount > 1) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String toolVersion(Environment env, String attrKey) {

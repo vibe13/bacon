@@ -121,7 +121,7 @@ public class BuildConfigGenerator {
     boolean reselectEnvironment(BuildConfig buildConfig, Project project, Environment existingEnvironment) {
         ProjectBuildInfo detected = buildInfoDetector.detect(project);
         ProjectBuildInfo effective = buildInfoForExistingBuildConfig(detected, buildConfig, existingEnvironment);
-        Environment selected = environments.selectEnvironment(effective);
+        Environment selected = environments.selectEnvironment(effective, existingEnvironment);
 
         if (selected.getId().equals(existingEnvironment.getId())) {
             log.info(
@@ -148,15 +148,17 @@ public class BuildConfigGenerator {
             BuildConfig buildConfig,
             Environment existingEnvironment) {
         JdkVersion jdkVersion = detected.getJdkVersion();
-        if (detected.getDetectionSource() != null && detected.getDetectionSource().startsWith("default")) {
-            JdkVersion existingJdk = JdkVersion.fromVersionString(existingEnvironment.getAttributes().get("JDK"));
-            if (existingJdk != null) {
-                jdkVersion = existingJdk;
+        JdkVersion existingJdk = JdkVersion.fromVersionString(existingEnvironment.getAttributes().get("JDK"));
+        if (existingJdk != null) {
+            jdkVersion = existingJdk;
+            if (existingJdk != detected.getJdkVersion()) {
                 log.info(
-                        "SCM detection did not identify a JDK for {}; keeping {} from existing environment '{}'",
-                        buildConfig.getName(),
+                        "Keeping JDK {} from existing environment '{}' for {}; SCM detection suggested {} from {}",
                         existingJdk,
-                        existingEnvironment.getName());
+                        existingEnvironment.getName(),
+                        buildConfig.getName(),
+                        detected.getJdkVersion(),
+                        detected.getDetectionSource());
             }
         }
 
