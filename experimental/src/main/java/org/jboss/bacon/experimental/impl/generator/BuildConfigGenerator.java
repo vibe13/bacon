@@ -39,9 +39,10 @@ public class BuildConfigGenerator {
     private final ProjectBuildInfoDetector buildInfoDetector;
 
     public BuildConfigGenerator(BuildConfigGeneratorConfig buildConfigGeneratorConfig) {
-        this.config = buildConfigGeneratorConfig;
-        environments = new EnvironmentResolver(buildConfigGeneratorConfig);
-        buildInfoDetector = new ProjectBuildInfoDetector();
+        this(
+                buildConfigGeneratorConfig,
+                new EnvironmentResolver(buildConfigGeneratorConfig),
+                new ProjectBuildInfoDetector());
     }
 
     BuildConfigGenerator(
@@ -94,7 +95,7 @@ public class BuildConfigGenerator {
     public BuildConfig processProject(Project project, FoundProject found) {
         String name = project.getName();
         BuildConfig buildConfig;
-        Environment existingEnvironment = null;
+        Environment existingEnvironment;
         // Strategy
         if (found.isManaged()) {
             existingEnvironment = found.getBuildConfig().getEnvironment();
@@ -118,7 +119,7 @@ public class BuildConfigGenerator {
         return buildConfig;
     }
 
-    boolean reselectEnvironment(BuildConfig buildConfig, Project project, Environment existingEnvironment) {
+    void reselectEnvironment(BuildConfig buildConfig, Project project, Environment existingEnvironment) {
         ProjectBuildInfo detected = buildInfoDetector.detect(project);
         ProjectBuildInfo effective = buildInfoForExistingBuildConfig(detected, buildConfig, existingEnvironment);
         Environment selected = environments.selectEnvironment(effective, existingEnvironment);
@@ -131,7 +132,7 @@ public class BuildConfigGenerator {
                     "Environment detection kept '{}' for existing Build Config {}",
                     currentEnvironment.getName(),
                     buildConfig.getName());
-            return false;
+            return;
         }
 
         log.info(
@@ -143,7 +144,6 @@ public class BuildConfigGenerator {
         buildConfig.setSystemImageId(null);
         buildConfig.setEnvironmentName(selected.getName());
         buildConfig.setBuildScript(updateBuildScript(buildConfig.getBuildScript(), taintedMessage(project)));
-        return true;
     }
 
     private ProjectBuildInfo buildInfoForExistingBuildConfig(
@@ -152,17 +152,13 @@ public class BuildConfigGenerator {
             Environment existingEnvironment) {
         JdkVersion jdkVersion = detected.getJdkVersion();
         JdkVersion existingJdk = JdkVersion.fromVersionString(existingEnvironment.getAttributes().get("JDK"));
-        if (existingJdk != null) {
+        if (!hasDetectedJdk(detected) && existingJdk != null) {
             jdkVersion = existingJdk;
-            if (existingJdk != detected.getJdkVersion()) {
-                log.info(
-                        "Keeping JDK {} from existing environment '{}' for {}; SCM detection suggested {} from {}",
-                        existingJdk,
-                        existingEnvironment.getName(),
-                        buildConfig.getName(),
-                        detected.getJdkVersion(),
-                        detected.getDetectionSource());
-            }
+            log.info(
+                    "Keeping JDK {} from existing environment '{}' for {} because project JDK detection used the default",
+                    existingJdk,
+                    existingEnvironment.getName(),
+                    buildConfig.getName());
         }
 
         BuildType buildType = detected.getBuildType();
@@ -182,9 +178,14 @@ public class BuildConfigGenerator {
                 .jdkVersion(jdkVersion)
                 .buildType(buildType)
                 .buildToolVersion(detected.getBuildToolVersion())
-                .buildToolVersionConstraint(detected.getBuildToolVersionConstraint())
+                .buildToolVersionRange(detected.getBuildToolVersionRange())
                 .detectionSource(detected.getDetectionSource())
                 .build();
+    }
+
+    private static boolean hasDetectedJdk(ProjectBuildInfo buildInfo) {
+        String source = buildInfo.getDetectionSource();
+        return source != null && !source.startsWith("default");
     }
 
     private BuildConfig generateNewBuildConfig(Project project, String name) {

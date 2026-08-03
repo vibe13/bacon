@@ -1,10 +1,14 @@
 package org.jboss.bacon.experimental.impl.projectfinder;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.util.Optional;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
 
+import org.apache.http.impl.client.CloseableHttpClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -218,9 +222,9 @@ class ProjectBuildInfoDetectorTest {
         }
 
         @Test
-        void choosesStrongestDetectedMavenRequirement() {
-            assertThat(detector.strongestMavenRequirement("[3.6.3,)", "[3.8.1,)", "[3.2.5,)"))
-                    .isEqualTo("[3.8.1,)");
+        void intersectsDetectedMavenRequirements() {
+            assertThat(detector.combineMavenRequirements("[3.6.3,4.0.0)", "[3.8.1,)", "[3.2.5,)"))
+                    .isEqualTo("[3.8.1,4.0.0)");
         }
 
         @Test
@@ -240,6 +244,32 @@ class ProjectBuildInfoDetectorTest {
 
             assertThat(detector.parseEnforcerMavenVersion(result.parsedPomDoc)).isEqualTo("[3.6.3,4.0.0)");
         }
+
+        @Test
+        void keepsWrapperPreferenceAndHardPomRequirement() {
+            ScmFileAccessor accessor = mock(ScmFileAccessor.class);
+            ProjectBuildInfoDetector detector = new ProjectBuildInfoDetector(
+                    mock(CloseableHttpClient.class),
+                    accessor);
+            when(accessor.fetchFile("https://github.com/example/project", "1.0", ".mvn/wrapper/maven-wrapper.properties"))
+                    .thenReturn(Optional.of(
+                            "distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.6.0/apache-maven-3.6.0-bin.zip"));
+
+            ProjectBuildInfoDetector.ScmDetectionResult result = new ProjectBuildInfoDetector.ScmDetectionResult();
+            detector.parsePomXml(
+                    "<project><build><plugins><plugin>"
+                            + "<artifactId>maven-enforcer-plugin</artifactId>"
+                            + "<configuration><rules><requireMavenVersion><version>3.6.3</version>"
+                            + "</requireMavenVersion></rules></configuration>"
+                            + "</plugin></plugins></build></project>",
+                    result);
+
+            detector.detectMavenVersion("https://github.com/example/project", "1.0", result);
+
+            assertThat(result.buildToolVersion).isEqualTo("3.6.0");
+            assertThat(result.buildToolVersionRange).isEqualTo("[3.6.3,)");
+        }
+
     }
 
     @Nested

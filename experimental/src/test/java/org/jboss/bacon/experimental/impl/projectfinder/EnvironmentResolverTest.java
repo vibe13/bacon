@@ -153,21 +153,37 @@ class EnvironmentResolverTest {
     }
 
     @Test
-    void selectsHighestMavenVersionSatisfyingRequiredRange() {
-        addEnv("1", "OpenJDK 17.0; Mvn 3.6.0", Map.of("JDK", "17.0", "MAVEN", "3.6.0", "OS", "Linux"));
-        addEnv("2", "OpenJDK 17.0; Mvn 3.6.3", Map.of("JDK", "17.0", "MAVEN", "3.6.3", "OS", "Linux"));
-        addEnv("3", "OpenJDK 17.0; Mvn 3.9.9", Map.of("JDK", "17.0", "MAVEN", "3.9.9", "OS", "Linux"));
+    void hardRequirementOverridesOlderWrapperPreference() {
+        addEnv("1", "OpenJDK 17.0; Mvn 3.6.0", Map.of("JDK", "17.0", "MAVEN", "3.6.0"));
+        addEnv("2", "OpenJDK 17.0; Mvn 3.6.3", Map.of("JDK", "17.0", "MAVEN", "3.6.3"));
+        addEnv("3", "OpenJDK 17.0; Mvn 3.9.9", Map.of("JDK", "17.0", "MAVEN", "3.9.9"));
 
         EnvironmentResolver resolver = new EnvironmentResolver(environments, config);
         ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
                 .jdkVersion(JdkVersion.JDK_17)
                 .buildType(BuildType.MVN)
-                .buildToolVersion("[3.6.3,)")
-                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .buildToolVersion("3.6.0")
+                .buildToolVersionRange("[3.6.3,)")
                 .build();
 
-        Environment selected = resolver.selectEnvironment(buildInfo);
-        assertThat(selected.getId()).isEqualTo("3");
+        assertThat(resolver.selectEnvironment(buildInfo).getId()).isEqualTo("2");
+    }
+
+    @Test
+    void wrapperPreferenceRemainsInsideRequiredUpperBound() {
+        addEnv("1", "OpenJDK 17.0; Mvn 3.5.4", Map.of("JDK", "17.0", "MAVEN", "3.5.4"));
+        addEnv("2", "OpenJDK 17.0; Mvn 3.8.8", Map.of("JDK", "17.0", "MAVEN", "3.8.8"));
+        addEnv("3", "OpenJDK 17.0; Mvn 3.9.6", Map.of("JDK", "17.0", "MAVEN", "3.9.6"));
+
+        EnvironmentResolver resolver = new EnvironmentResolver(environments, config);
+        ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
+                .jdkVersion(JdkVersion.JDK_17)
+                .buildType(BuildType.MVN)
+                .buildToolVersion("3.8.0")
+                .buildToolVersionRange("[3.6.3,3.9.0)")
+                .build();
+
+        assertThat(resolver.selectEnvironment(buildInfo).getId()).isEqualTo("2");
     }
 
     @Test
@@ -179,8 +195,7 @@ class EnvironmentResolverTest {
         ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
                 .jdkVersion(JdkVersion.JDK_17)
                 .buildType(BuildType.MVN)
-                .buildToolVersion("[3.6.3,3.9.0)")
-                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .buildToolVersionRange("[3.6.3,3.9.0)")
                 .build();
 
         Environment selected = resolver.selectEnvironment(buildInfo);
@@ -341,8 +356,7 @@ class EnvironmentResolverTest {
         ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
                 .jdkVersion(JdkVersion.JDK_11)
                 .buildType(BuildType.MVN)
-                .buildToolVersion("[3.6.3,)")
-                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .buildToolVersionRange("[3.6.3,)")
                 .build();
 
         Environment selected = resolver.selectEnvironment(buildInfo);
@@ -362,8 +376,7 @@ class EnvironmentResolverTest {
         ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
                 .jdkVersion(JdkVersion.JDK_11)
                 .buildType(BuildType.MVN)
-                .buildToolVersion("[3.6.3,)")
-                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .buildToolVersionRange("[3.6.3,)")
                 .build();
 
         Environment selected = resolver.selectEnvironment(buildInfo, existing);
@@ -383,8 +396,7 @@ class EnvironmentResolverTest {
         ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
                 .jdkVersion(JdkVersion.JDK_11)
                 .buildType(BuildType.MVN)
-                .buildToolVersion("[3.6.3,)")
-                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .buildToolVersionRange("[3.6.3,)")
                 .build();
 
         Environment selected = resolver.selectEnvironment(buildInfo, bundled);
@@ -440,12 +452,30 @@ class EnvironmentResolverTest {
         ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
                 .jdkVersion(JdkVersion.JDK_1_8)
                 .buildType(BuildType.MVN)
-                .buildToolVersion("[3.8.1,)")
-                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .buildToolVersionRange("[3.8.1,)")
                 .build();
 
         Environment selected = resolver.selectEnvironment(buildInfo, deprecated);
         assertThat(selected.getId()).isEqualTo("700");
+    }
+
+    @Test
+    void requiredUpperBoundCanOverrideNoDowngradePreference() {
+        Environment existing = buildEnv(
+                "1",
+                "OpenJDK 11.0; Mvn 3.9.6",
+                Map.of("JDK", "11", "MAVEN", "3.9.6"));
+        environments.put(existing.getId(), existing);
+        addEnv("2", "OpenJDK 11.0; Mvn 3.8.8", Map.of("JDK", "11", "MAVEN", "3.8.8"));
+
+        EnvironmentResolver resolver = new EnvironmentResolver(environments, config);
+        ProjectBuildInfo buildInfo = ProjectBuildInfo.builder()
+                .jdkVersion(JdkVersion.JDK_11)
+                .buildType(BuildType.MVN)
+                .buildToolVersionRange("[3.6.3,3.9.0)")
+                .build();
+
+        assertThat(resolver.selectEnvironment(buildInfo, existing).getId()).isEqualTo("2");
     }
 
     @Test

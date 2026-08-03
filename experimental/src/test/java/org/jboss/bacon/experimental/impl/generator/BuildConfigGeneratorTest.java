@@ -11,7 +11,6 @@ import java.util.Map;
 
 import org.jboss.bacon.experimental.impl.config.BuildConfigGeneratorConfig;
 import org.jboss.bacon.experimental.impl.dependencies.Project;
-import org.jboss.bacon.experimental.impl.projectfinder.BuildToolVersionConstraint;
 import org.jboss.bacon.experimental.impl.projectfinder.EnvironmentResolver;
 import org.jboss.bacon.experimental.impl.projectfinder.JdkVersion;
 import org.jboss.bacon.experimental.impl.projectfinder.ProjectBuildInfo;
@@ -48,7 +47,6 @@ public class BuildConfigGeneratorTest {
     @Test
     public void reselectsEnvironmentForExistingBuildConfig() {
         BuildConfigGeneratorConfig config = new BuildConfigGeneratorConfig();
-        config.setReselectEnvironmentForExistingBuildConfigs(true);
         EnvironmentResolver environmentResolver = mock(EnvironmentResolver.class);
         ProjectBuildInfoDetector detector = mock(ProjectBuildInfoDetector.class);
         BuildConfigGenerator generator = new BuildConfigGenerator(config, environmentResolver, detector);
@@ -58,7 +56,6 @@ public class BuildConfigGeneratorTest {
                 .jdkVersion(JdkVersion.JDK_11)
                 .buildType(BuildType.MVN)
                 .buildToolVersion("3.9.6")
-                .buildToolVersionConstraint(BuildToolVersionConstraint.PREFERRED)
                 .detectionSource("Maven Wrapper")
                 .build();
         when(detector.detect(project)).thenReturn(detected);
@@ -73,9 +70,8 @@ public class BuildConfigGeneratorTest {
         buildConfig.setBuildScript("mvn clean deploy");
         buildConfig.setSystemImageId("old-image");
 
-        boolean changed = generator.reselectEnvironment(buildConfig, project, oldEnvironment);
+        generator.reselectEnvironment(buildConfig, project, oldEnvironment);
 
-        assertThat(changed).isTrue();
         assertThat(buildConfig.getEnvironmentName()).isEqualTo(newEnvironment.getName());
         assertThat(buildConfig.getSystemImageId()).isNull();
         assertThat(buildConfig.getBuildScript()).contains("modified by Autobuilder");
@@ -90,10 +86,9 @@ public class BuildConfigGeneratorTest {
 
         Project project = mock(Project.class);
         ProjectBuildInfo detected = ProjectBuildInfo.builder()
-                .jdkVersion(JdkVersion.JDK_11)
+                .jdkVersion(JdkVersion.JDK_1_8)
                 .buildType(BuildType.MVN)
-                .buildToolVersion("[3.6.3,)")
-                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .buildToolVersionRange("[3.6.3,)")
                 .detectionSource("pom.xml")
                 .build();
         when(detector.detect(project)).thenReturn(detected);
@@ -124,14 +119,13 @@ public class BuildConfigGeneratorTest {
         buildConfig.setBuildScript("mvn clean deploy");
         buildConfig.setEnvironmentName(automaticReplacement.getName());
 
-        boolean changed = generator.reselectEnvironment(buildConfig, project, original);
+        generator.reselectEnvironment(buildConfig, project, original);
 
-        assertThat(changed).isTrue();
         assertThat(buildConfig.getEnvironmentName()).isEqualTo(conservativeReplacement.getName());
     }
 
     @Test
-    public void keepsExistingJdkWhenScmDetectionSuggestsDifferentJdk() {
+    public void usesDetectedJdkWhenProjectDetectionIsConclusive() {
         BuildConfigGeneratorConfig config = new BuildConfigGeneratorConfig();
         EnvironmentResolver environmentResolver = mock(EnvironmentResolver.class);
         ProjectBuildInfoDetector detector = mock(ProjectBuildInfoDetector.class);
@@ -141,8 +135,7 @@ public class BuildConfigGeneratorTest {
         ProjectBuildInfo detected = ProjectBuildInfo.builder()
                 .jdkVersion(JdkVersion.JDK_17)
                 .buildType(BuildType.MVN)
-                .buildToolVersion("[3.6.3,)")
-                .buildToolVersionConstraint(BuildToolVersionConstraint.REQUIRED_RANGE)
+                .buildToolVersionRange("[3.6.3,)")
                 .detectionSource("MANIFEST.MF from Maven Central")
                 .build();
         when(detector.detect(project)).thenReturn(detected);
@@ -159,8 +152,38 @@ public class BuildConfigGeneratorTest {
 
         ArgumentCaptor<ProjectBuildInfo> captor = ArgumentCaptor.forClass(ProjectBuildInfo.class);
         verify(environmentResolver).selectEnvironment(captor.capture(), same(existing));
-        assertThat(captor.getValue().getJdkVersion()).isEqualTo(JdkVersion.JDK_11);
+        assertThat(captor.getValue().getJdkVersion()).isEqualTo(JdkVersion.JDK_17);
         assertThat(captor.getValue().getBuildType()).isEqualTo(BuildType.MVN);
+    }
+
+    @Test
+    public void keepsExistingJdkWhenProjectDetectionUsesDefault() {
+        BuildConfigGeneratorConfig config = new BuildConfigGeneratorConfig();
+        EnvironmentResolver environmentResolver = mock(EnvironmentResolver.class);
+        ProjectBuildInfoDetector detector = mock(ProjectBuildInfoDetector.class);
+        BuildConfigGenerator generator = new BuildConfigGenerator(config, environmentResolver, detector);
+
+        Project project = mock(Project.class);
+        ProjectBuildInfo detected = ProjectBuildInfo.builder()
+                .jdkVersion(JdkVersion.JDK_11)
+                .buildType(BuildType.MVN)
+                .detectionSource("default (no JDK version detected)")
+                .build();
+        when(detector.detect(project)).thenReturn(detected);
+
+        Environment existing = environment("1", "OpenJDK 1.8; Mvn 3.5.4", "1.8", "3.5.4");
+        when(environmentResolver.selectEnvironment(any(), same(existing))).thenReturn(existing);
+
+        BuildConfig buildConfig = new BuildConfig();
+        buildConfig.setName("example");
+        buildConfig.setBuildType("MVN");
+        buildConfig.setBuildScript("mvn clean deploy");
+
+        generator.reselectEnvironment(buildConfig, project, existing);
+
+        ArgumentCaptor<ProjectBuildInfo> captor = ArgumentCaptor.forClass(ProjectBuildInfo.class);
+        verify(environmentResolver).selectEnvironment(captor.capture(), same(existing));
+        assertThat(captor.getValue().getJdkVersion()).isEqualTo(JdkVersion.JDK_1_8);
     }
 
     private static Environment environment(String id, String name, String jdk, String maven) {

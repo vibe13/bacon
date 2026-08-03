@@ -69,7 +69,7 @@ public class BuildConfigGeneratorConfig {
      * This is useful for correcting Build Configs that were originally created with an unsuitable environment, for
      * example a Maven version older than the version required by the Maven Wrapper or Maven Enforcer Plugin.
      *
-     * When SCM detection cannot determine the JDK, Autobuilder keeps the JDK from the existing environment. The
+     * When project detection falls back to the default JDK, Autobuilder keeps the JDK from the existing environment. The
      * existing Build Config build type is also preserved; only the environment is reselected.
      */
     private boolean reselectEnvironmentForExistingBuildConfigs = false;

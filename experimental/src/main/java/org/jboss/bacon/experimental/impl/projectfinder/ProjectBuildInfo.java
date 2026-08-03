@@ -11,6 +11,6 @@ public class ProjectBuildInfo {
     private JdkVersion jdkVersion;
     private BuildType buildType;
     private String buildToolVersion;
-    private BuildToolVersionConstraint buildToolVersionConstraint;
+    private String buildToolVersionRange;
     private String detectionSource;
 }
