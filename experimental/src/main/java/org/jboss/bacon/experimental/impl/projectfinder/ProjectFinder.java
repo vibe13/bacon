@@ -2,6 +2,7 @@ package org.jboss.bacon.experimental.impl.projectfinder;
 
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -75,13 +76,28 @@ public class ProjectFinder {
         Set<Project> projects = new HashSet<>();
         traverseTree(projects, dependencies.getTopLevelProjects());
 
-        Set<GAV> allGAVs = projects.stream().flatMap(p -> p.getGavs().stream()).collect(Collectors.toSet());
+        Map<Project, BuildConfiguration> managedProjects = new HashMap<>();
+        for (Project project : projects) {
+            BuildConfiguration buildConfig = findBuildConfig(project.getName());
+            if (buildConfig != null) {
+                managedProjects.put(project, buildConfig);
+            }
+        }
 
-        Map<GAV, List<String>> availableVersions = findAvailableVersions(allGAVs);
+        Set<Project> excludedManagedProjects = excludeManagedProjectsWithConfiguredSuffix(
+                dependencies, projects, managedProjects.keySet());
+        projects.removeAll(excludedManagedProjects);
 
         FoundProjects foundProjects = new FoundProjects();
+        if (projects.isEmpty()) {
+            return foundProjects;
+        }
+
+        Set<GAV> allGAVs = projects.stream().flatMap(p -> p.getGavs().stream()).collect(Collectors.toSet());
+        Map<GAV, List<String>> availableVersions = findAvailableVersions(allGAVs);
+
         for (Project project : projects) {
-            FoundProject foundProject = findManagedProject(project);
+            FoundProject foundProject = findManagedProject(project, managedProjects.get(project));
             if (foundProject == null) {
                 foundProject = findPreviouslyBuiltProject(project, availableVersions);
             }
@@ -91,8 +107,44 @@ public class ProjectFinder {
         return foundProjects;
     }
 
-    private FoundProject findManagedProject(Project project) {
-        BuildConfiguration buildConfig = findBuildConfig(project.getName());
+    Set<Project> excludeManagedProjectsWithConfiguredSuffix(
+            DependencyResult dependencies,
+            Set<Project> projects,
+            Set<Project> managedProjects) {
+        String configuredSuffix = config.getBuildNameSuffix();
+        if (configuredSuffix.isEmpty()) {
+            return Set.of();
+        }
+
+        Set<Project> toExclude = managedProjects.stream()
+                .filter(project -> project.getName().endsWith(configuredSuffix))
+                .collect(Collectors.toSet());
+        if (toExclude.isEmpty()) {
+            return Set.of();
+        }
+
+        Set<Project> topLevelProjects = new HashSet<>(dependencies.getTopLevelProjects());
+        topLevelProjects.removeAll(toExclude);
+        dependencies.setTopLevelProjects(topLevelProjects);
+
+        for (Project project : projects) {
+            if (toExclude.contains(project)) {
+                continue;
+            }
+            Set<Project> remainingDependencies = new HashSet<>(project.getDependencies());
+            remainingDependencies.removeAll(toExclude);
+            project.setDependencies(remainingDependencies);
+        }
+
+        log.info(
+                "Excluding {} existing BuildConfig(s) whose generated names use configured suffix '{}': {}",
+                toExclude.size(),
+                configuredSuffix,
+                toExclude.stream().map(Project::getName).sorted().collect(Collectors.joining(", ")));
+        return toExclude;
+    }
+
+    private FoundProject findManagedProject(Project project, BuildConfiguration buildConfig) {
         if (buildConfig == null) {
             return null;
         }

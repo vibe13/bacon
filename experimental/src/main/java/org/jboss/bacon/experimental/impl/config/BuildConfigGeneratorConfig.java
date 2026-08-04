@@ -76,7 +76,10 @@ public class BuildConfigGeneratorConfig {
     private boolean reselectEnvironmentForExistingBuildConfigs = false;
 
     /**
-     * Suffix appended to generated build config names. Set to empty string to disable.
+     * Suffix appended to generated build config names. A non-empty suffix also defines the managed BuildConfig
+     * namespace for dependency generation: an exact generated name that already exists in PNC is omitted from the
+     * graph, while BuildConfigs using another suffix are treated as different, non-managed BuildConfigs. Set to an
+     * empty string to retain the previous reuse behavior.
      */
     @NotNull
     private String buildNameSuffix = "-AUTOBUILD";

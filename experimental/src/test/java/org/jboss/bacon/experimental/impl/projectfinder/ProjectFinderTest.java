@@ -100,7 +100,8 @@ public class ProjectFinderTest {
     }
 
     @Test
-    public void shouldReuseAutobuilderConfig() throws RemoteResourceException {
+    public void shouldReuseAutobuilderConfigWhenSuffixIsEmpty() throws RemoteResourceException {
+        config.setBuildNameSuffix("");
         GAV gav = new GAV("foo.bar", "managed", "1.2.3");
         Project project = new Project();
         project.setGavs(Set.of(gav));
@@ -121,6 +122,26 @@ public class ProjectFinderTest {
         assertThat(found.isFound()).isTrue();
         assertThat(found.isManaged()).isTrue();
         assertThat(found.getBuildConfig().getBuildScript()).contains("# Created by Autobuilder-afs231");
+    }
+
+    @Test
+    public void shouldExcludeExistingBuildConfigUsingConfiguredSuffix() throws RemoteResourceException {
+        config.setBuildNameSuffix("-AUTOBUILDER");
+        GAV gav = new GAV("foo.bar", "managed", "1.2.3");
+        Project project = new Project();
+        project.setGavs(Set.of(gav));
+        project.setName("foo.bar-managed-1.2.3-AUTOBUILDER");
+        project.setDependencies(Set.of());
+        project.setSourceCodeURL("https://github.com/eclipse-ee4j/jaxb-ri.git");
+        project.setSourceCodeRevision("2.3.3-b02-RI");
+
+        DependencyResult dependencyResult = new DependencyResult();
+        dependencyResult.setTopLevelProjects(Set.of(project));
+
+        FoundProjects projects = finder.findProjects(dependencyResult);
+
+        assertThat(projects.getFoundProjects()).isEmpty();
+        assertThat(dependencyResult.getTopLevelProjects()).isEmpty();
     }
 
     @Test
@@ -189,6 +210,55 @@ public class ProjectFinderTest {
         FoundProject found = projects.getFoundProjects().iterator().next();
         assertThat(found).isNotNull();
         assertThat(found.isFound()).isFalse();
+    }
+
+    @Test
+    public void shouldExcludeOnlyManagedProjectsUsingConfiguredSuffix() {
+        config.setBuildNameSuffix("-rhlw-rebuild");
+
+        Project root = project("foo.bar-root-1.2.3-rhlw-rebuild");
+        Project currentManaged = project("foo.bar-current-1.2.3-rhlw-rebuild");
+        Project oldAutobuilder = project("foo.bar-old-1.2.3-AUTOBUILDER");
+        root.setDependencies(Set.of(currentManaged, oldAutobuilder));
+
+        DependencyResult dependencies = new DependencyResult();
+        dependencies.setTopLevelProjects(Set.of(root, currentManaged));
+        Set<Project> projects = Set.of(root, currentManaged, oldAutobuilder);
+
+        Set<Project> excluded = finder.excludeManagedProjectsWithConfiguredSuffix(
+                dependencies, projects, Set.of(currentManaged, oldAutobuilder));
+
+        assertThat(excluded).containsExactly(currentManaged);
+        assertThat(dependencies.getTopLevelProjects()).containsExactly(root);
+        assertThat(root.getDependencies()).containsExactly(oldAutobuilder);
+    }
+
+    @Test
+    public void shouldKeepCurrentManagedProjectBehaviorWhenSuffixIsEmpty() {
+        config.setBuildNameSuffix("");
+
+        Project root = project("foo.bar-root-1.2.3");
+        Project managed = project("foo.bar-managed-1.2.3");
+        root.setDependencies(Set.of(managed));
+
+        DependencyResult dependencies = new DependencyResult();
+        dependencies.setTopLevelProjects(Set.of(root));
+        Set<Project> projects = Set.of(root, managed);
+
+        Set<Project> excluded = finder.excludeManagedProjectsWithConfiguredSuffix(
+                dependencies, projects, Set.of(managed));
+
+        assertThat(excluded).isEmpty();
+        assertThat(dependencies.getTopLevelProjects()).containsExactly(root);
+        assertThat(root.getDependencies()).containsExactly(managed);
+    }
+
+    private Project project(String name) {
+        Project project = new Project();
+        project.setName(name);
+        project.setGavs(Set.of(new GAV("foo.bar", name, "1.2.3")));
+        project.setDependencies(Set.of());
+        return project;
     }
 
     private DependencyResult generateDependencyResult() {
