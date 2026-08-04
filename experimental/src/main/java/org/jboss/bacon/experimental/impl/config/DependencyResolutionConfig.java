@@ -62,10 +62,9 @@ public class DependencyResolutionConfig {
     private List<String> recipeRepos = List.of();
 
     /**
-     * When enabled, Autobuilder rebuilds existing builds that are not managed under the configured buildNameSuffix
-     * and creates a BuildConfig copy using that suffix. BuildConfigs using a different suffix are non-managed for this
-     * purpose. Existing BuildConfigs whose exact generated name uses the configured non-empty suffix are omitted from
-     * the graph independently of this option.
+     * When enabled, Autobuilder keeps previously built projects in the generated graph. Existing exact-name
+     * BuildConfigs using the configured buildNameSuffix are therefore reused and may be rebuilt rather than filtered
+     * out. When disabled and buildNameSuffix is non-empty, those exact-name BuildConfigs are omitted from the graph.
      */
     private boolean rebuildNonAutoBuilds = false;
 

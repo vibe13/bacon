@@ -108,7 +108,9 @@ public class DependencyGenerator {
             DependencyResolver dependencyResolver = new DependencyResolver(config.getDependencyResolutionConfig());
             ProjectNameGenerator projectNameGenerator = new ProjectNameGenerator(
                     config.getBuildConfigGeneratorConfig().getBuildNameSuffix());
-            ProjectFinder projectFinder = new ProjectFinder(config.getBuildConfigGeneratorConfig());
+            ProjectFinder projectFinder = new ProjectFinder(
+                    config.getBuildConfigGeneratorConfig(),
+                    config.getDependencyResolutionConfig().isRebuildNonAutoBuilds());
             BuildConfigGenerator buildConfigGenerator = new BuildConfigGenerator(
                     config.getBuildConfigGeneratorConfig());
             // Analyze dependencies

@@ -125,6 +125,29 @@ public class ProjectFinderTest {
     }
 
     @Test
+    public void shouldNotExcludeExistingBuildConfigUsingConfiguredSuffixWhenRebuildEnabled()
+            throws RemoteResourceException {
+        config.setBuildNameSuffix("-AUTOBUILDER");
+        finder = new ProjectFinder(config, true);
+        GAV gav = new GAV("foo.bar", "managed", "1.2.3");
+        Project project = new Project();
+        project.setGavs(Set.of(gav));
+        project.setName("foo.bar-managed-1.2.3-AUTOBUILDER");
+        project.setDependencies(Set.of());
+        project.setSourceCodeURL("https://github.com/eclipse-ee4j/jaxb-ri.git");
+        project.setSourceCodeRevision("2.3.3-b02-RI");
+
+        DependencyResult dependencyResult = new DependencyResult();
+        dependencyResult.setTopLevelProjects(Set.of(project));
+
+        FoundProjects projects = finder.findProjects(dependencyResult);
+
+        assertThat(projects.getFoundProjects()).hasSize(1);
+        assertThat(projects.getFoundProjects().iterator().next().isManaged()).isTrue();
+        assertThat(dependencyResult.getTopLevelProjects()).containsExactly(project);
+    }
+
+    @Test
     public void shouldExcludeExistingBuildConfigUsingConfiguredSuffix() throws RemoteResourceException {
         config.setBuildNameSuffix("-AUTOBUILDER");
         GAV gav = new GAV("foo.bar", "managed", "1.2.3");
@@ -231,6 +254,22 @@ public class ProjectFinderTest {
         assertThat(excluded).containsExactly(currentManaged);
         assertThat(dependencies.getTopLevelProjects()).containsExactly(root);
         assertThat(root.getDependencies()).containsExactly(oldAutobuilder);
+    }
+
+    @Test
+    public void shouldNotFilterConfiguredSuffixWhenRebuildNonAutoBuildsIsEnabled() {
+        config.setBuildNameSuffix("-rhlw-rebuild");
+        finder = new ProjectFinder(config, true);
+
+        Project managed = project("foo.bar-managed-1.2.3-rhlw-rebuild");
+        DependencyResult dependencies = new DependencyResult();
+        dependencies.setTopLevelProjects(Set.of(managed));
+
+        Set<Project> excluded = finder.excludeManagedProjectsWithConfiguredSuffix(
+                dependencies, Set.of(managed), Set.of(managed));
+
+        assertThat(excluded).isEmpty();
+        assertThat(dependencies.getTopLevelProjects()).containsExactly(managed);
     }
 
     @Test

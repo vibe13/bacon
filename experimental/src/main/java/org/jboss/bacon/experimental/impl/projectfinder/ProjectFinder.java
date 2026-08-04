@@ -50,9 +50,15 @@ public class ProjectFinder {
     private final BuildConfigurationClient buildConfigClient;
     private final VersionParser versionParser = new VersionParser("redhat", "temporary-redhat");
     private final BuildConfigGeneratorConfig config;
+    private final boolean rebuildNonAutoBuilds;
 
     public ProjectFinder(BuildConfigGeneratorConfig config) {
+        this(config, false);
+    }
+
+    public ProjectFinder(BuildConfigGeneratorConfig config, boolean rebuildNonAutoBuilds) {
         this.config = config;
+        this.rebuildNonAutoBuilds = rebuildNonAutoBuilds;
         lookupApi = DaHelper.createLookupApi();
         artifactClient = new ClientCreator<>(ArtifactClient::new).newClient();
         buildClient = new ClientCreator<>(BuildClient::new).newClient();
@@ -65,7 +71,18 @@ public class ProjectFinder {
             ArtifactClient artifactClient,
             BuildClient buildClient,
             BuildConfigurationClient buildConfigClient) {
+        this(config, false, lookupApi, artifactClient, buildClient, buildConfigClient);
+    }
+
+    ProjectFinder(
+            BuildConfigGeneratorConfig config,
+            boolean rebuildNonAutoBuilds,
+            LookupApi lookupApi,
+            ArtifactClient artifactClient,
+            BuildClient buildClient,
+            BuildConfigurationClient buildConfigClient) {
         this.config = config;
+        this.rebuildNonAutoBuilds = rebuildNonAutoBuilds;
         this.lookupApi = lookupApi;
         this.artifactClient = artifactClient;
         this.buildClient = buildClient;
@@ -113,6 +130,12 @@ public class ProjectFinder {
             Set<Project> managedProjects) {
         String configuredSuffix = config.getBuildNameSuffix();
         if (configuredSuffix.isEmpty()) {
+            return Set.of();
+        }
+        if (rebuildNonAutoBuilds) {
+            log.info(
+                    "Not filtering existing BuildConfigs by configured suffix '{}' because rebuildNonAutoBuilds is enabled",
+                    configuredSuffix);
             return Set.of();
         }
 
